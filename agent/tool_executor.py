@@ -126,6 +126,11 @@ def _budget_for_agent(agent) -> BudgetConfig:
     can't push the request past the model's limit (#23767). Falls back to the default budget when the
     context length isn't resolvable.
     """
+    # Hosts without local file tools can retain complete external observations
+    # instead of emitting spill-file references their tool surface cannot read.
+    override = getattr(agent, "tool_result_budget", None)
+    if override is not None:
+        return override
     try:
         ctx = getattr(getattr(agent, "context_compressor", None), "context_length", None)
         return budget_for_context_window(int(ctx) if ctx else None)

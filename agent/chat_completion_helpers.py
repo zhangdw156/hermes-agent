@@ -1258,6 +1258,13 @@ def _codex_silent_hang_hint(agent, api_kwargs: dict) -> Optional[str]:
 
 
 def interruptible_api_call(agent, api_kwargs: dict):
+    """Admit each non-streaming request, including stream diagnostic retries."""
+    controller = getattr(agent, "evaluation_controller", None)
+    send = lambda request: _interruptible_api_call_uncontrolled(agent, request)
+    return controller.request(agent, api_kwargs, send) if controller is not None else send(api_kwargs)
+
+
+def _interruptible_api_call_uncontrolled(agent, api_kwargs: dict):
     """Run the API call on a worker thread so the caller can detect interrupts
     without waiting for the full HTTP round-trip. Each worker gets its own
     per-request client (interrupts close only that one); a stale-call detector
@@ -2853,6 +2860,9 @@ class _StreamingCall(StreamingWaitMonitor):
 
     def _count_chunk(self, diag, chunk) -> None:
         """Stamp liveness for a real chunk; diagnostics are best-effort."""
+        controller = getattr(self.agent, "evaluation_controller", None)
+        if controller is not None:
+            controller.stream_chunk(chunk)
         self.last_chunk_time["t"] = time.time()
         self.agent._touch_activity("receiving stream response")
         with contextlib.suppress(Exception):
@@ -3710,6 +3720,13 @@ class _StreamingCall(StreamingWaitMonitor):
         return True
 
     def _call_wire(self, stream_attempt_id: int):
+        controller = getattr(self.agent, "evaluation_controller", None)
+        if controller is not None:
+            return controller.request(
+                self.agent, self.api_kwargs, lambda request: self._call_wire_uncontrolled(stream_attempt_id))
+        return self._call_wire_uncontrolled(stream_attempt_id)
+
+    def _call_wire_uncontrolled(self, stream_attempt_id: int):
         if self.agent.api_mode != "anthropic_messages":
             return self._call_chat_completions(stream_attempt_id)
         # Per-request client so the watchdog aborts its socket, not the shared one.
@@ -3759,6 +3776,10 @@ class _StreamingCall(StreamingWaitMonitor):
     def _run_call(self):
         try:
             self._call()
+        except BaseException as exc:
+            # Blocking evaluation failures must cross the worker-thread boundary,
+            # rather than becoming an empty successful response on the main thread.
+            self.result["error"] = exc
         finally:
             self._call_done.set()
 

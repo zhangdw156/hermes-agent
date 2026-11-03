@@ -1747,6 +1747,12 @@ def _run_conversation_turn(
     ):
         if _run_phase(begin_iteration, agent, s).action == "break":
             break
+        # Evaluation hosts need the live transcript before request preparation, including
+        # committed tool results. This blocking boundary deliberately propagates failures;
+        # observational plugin hooks are unsuitable for admission/checkpoint control.
+        controller = getattr(agent, "evaluation_controller", None)
+        if controller is not None and not controller.before_iteration(agent, s.messages):
+            break
         _run_phase(prepare_iteration, agent, s)
         _run_phase(assemble_api_request, agent, s)
         _pg = _run_phase(run_preflight_gate, agent, s)
