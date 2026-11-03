@@ -3839,6 +3839,10 @@ class _StreamingCall(StreamingWaitMonitor):
     def _run_call(self):
         try:
             self._call()
+        except BaseException as exc:
+            # Blocking evaluation failures must cross the worker-thread boundary,
+            # rather than becoming an empty successful response on the main thread.
+            self.result["error"] = exc
         finally:
             self._call_done.set()
 
